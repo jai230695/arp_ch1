@@ -24,11 +24,9 @@ import java.util.stream.Collectors;
 public class BenchmarkRunner {
     // CORRECTED MILP benchmark objectives based on MODEL column from research paper
     private static final Map<String, Double> MILP_BENCHMARK_OBJECTIVES = Map.of(
-            "month1", 201.0, // 20+10+30+16+20+90+15+0+0+0 = 201
-            "month2", 271.0, // 30+10+0+16+60+100+15+40+0+0 = 271 (partial sum visible), using calculated
-                             // total
-            "month3", 420.0 // 50+20+30+16+50+190+24+8+24+8 = 420 (partial sum visible), using calculated
-                            // total
+            "month1", 201.0, // SC1:20+SC2:10+SC3:30+SC4:16+SC5:20+SC6:90+SC7:15+SC8:0+SC9:0+SC10:0 = 201
+            "month2", 271.0, // SC1:30+SC2:10+SC3:0+SC4:16+SC5:60+SC6:100+SC7:15+SC8:40+SC9:0+SC10:0 = 271
+            "month3", 420.0 // SC1:50+SC2:20+SC3:30+SC4:16+SC5:50+SC6:190+SC7:24+SC8:8+SC9:24+SC10:8 = 420
     );
 
     private static final double EXCELLENT_GAP_THRESHOLD = 20.0; // 20% above MILP
@@ -188,7 +186,7 @@ public class BenchmarkRunner {
             final int runId = run;
             CompletableFuture<BenchmarkRun> future = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return executeingleBenchmarkRun(config, runId);
+                    return executeSingleBenchmarkRun(config, runId);
                 } catch (Exception e) {
                     LoggingUtils.logError("Benchmark run " + runId + " failed for " + config.getName(), e);
                     return new BenchmarkRun(runId, Double.MAX_VALUE, 0L, false, e.getMessage());
@@ -209,7 +207,7 @@ public class BenchmarkRunner {
     /**
      * Execute a single benchmark run
      */
-    private BenchmarkRun executeingleBenchmarkRun(BenchmarkConfiguration config, int runId) {
+    private BenchmarkRun executeSingleBenchmarkRun(BenchmarkConfiguration config, int runId) {
         long startTime = System.currentTimeMillis();
 
         try {
