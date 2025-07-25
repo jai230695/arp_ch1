@@ -84,7 +84,6 @@ Desktop.ini
 
 # Project specific
 results/
-data/
 logs/
 temp/
 *.csv
@@ -139,7 +138,6 @@ results/**
 !results/README.md
 
 # Ignore data but keep sample data
-data/**
 !data/sample/
 !data/README.md
 
