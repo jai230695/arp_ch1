@@ -1,4 +1,4 @@
-// File: src/main/java/com/arp/evaluation/BenchmarkRunner.java
+// File: src/main/java/com/arp_1/evaluation/BenchmarkRunner.java
 package com.arp_1.evaluation;
 
 import com.arp_1.core.data.DataLoader;
@@ -19,10 +19,18 @@ import java.util.stream.Collectors;
 
 /**
  * Comprehensive benchmark runner for comparing heuristic strategies against
- * MILP benchmarks
+ * MILP benchmarks with correct penalty values for months 1, 2, and 3
  */
 public class BenchmarkRunner {
-    private static final double MILP_BENCHMARK_OBJECTIVE = 70.0;
+    // CORRECTED MILP benchmark objectives based on MODEL column from research paper
+    private static final Map<String, Double> MILP_BENCHMARK_OBJECTIVES = Map.of(
+            "month1", 201.0, // 20+10+30+16+20+90+15+0+0+0 = 201
+            "month2", 271.0, // 30+10+0+16+60+100+15+40+0+0 = 271 (partial sum visible), using calculated
+                             // total
+            "month3", 420.0 // 50+20+30+16+50+190+24+8+24+8 = 420 (partial sum visible), using calculated
+                            // total
+    );
+
     private static final double EXCELLENT_GAP_THRESHOLD = 20.0; // 20% above MILP
     private static final double GOOD_GAP_THRESHOLD = 50.0; // 50% above MILP
 
@@ -30,6 +38,7 @@ public class BenchmarkRunner {
     private List<BenchmarkResult> results;
     private String outputDirectory;
     private ExecutorService executorService;
+    private String datasetName; // To determine which MILP benchmark to use
 
     public BenchmarkRunner(ProblemInstance instance) {
         this.instance = instance;
@@ -37,17 +46,47 @@ public class BenchmarkRunner {
         this.outputDirectory = "results/benchmark_" +
                 LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+        this.datasetName = detectDatasetName(instance);
 
         // Create output directory
         new File(outputDirectory).mkdirs();
     }
 
     /**
+     * Detect dataset name from problem instance to determine correct MILP benchmark
+     */
+    private String detectDatasetName(ProblemInstance instance) {
+        // Try to detect from instance metadata or default to month1
+        String instanceString = instance.toString().toLowerCase();
+        if (instanceString.contains("month1") || instanceString.contains("1")) {
+            return "month1";
+        } else if (instanceString.contains("month2") || instanceString.contains("2")) {
+            return "month2";
+        } else if (instanceString.contains("month3") || instanceString.contains("3")) {
+            return "month3";
+        }
+
+        // Default to month1 if cannot detect
+        LoggingUtils.logWarning("Cannot detect dataset month, defaulting to month1 MILP benchmark");
+        return "month1";
+    }
+
+    /**
+     * Get the correct MILP benchmark for current dataset
+     */
+    private double getMILPBenchmark() {
+        return MILP_BENCHMARK_OBJECTIVES.getOrDefault(datasetName, MILP_BENCHMARK_OBJECTIVES.get("month1"));
+    }
+
+    /**
      * Run comprehensive benchmark with all strategies
      */
     public List<BenchmarkResult> runComprehensiveBenchmark(int runsPerStrategy) {
+        double milpBenchmark = getMILPBenchmark();
+
         LoggingUtils.logSectionHeader("COMPREHENSIVE HEURISTIC BENCHMARK");
-        LoggingUtils.logInfo("MILP Benchmark Target: " + MILP_BENCHMARK_OBJECTIVE);
+        LoggingUtils.logInfo("Dataset: " + datasetName);
+        LoggingUtils.logInfo("MILP Benchmark Target: " + milpBenchmark);
         LoggingUtils.logInfo("Runs per strategy: " + runsPerStrategy);
         LoggingUtils.logInfo("Output directory: " + outputDirectory);
 
@@ -62,10 +101,11 @@ public class BenchmarkRunner {
             BenchmarkResult result = runStrategyBenchmark(config, runsPerStrategy);
             results.add(result);
 
-            // Log immediate results
+            // Log immediate results with correct MILP comparison
+            double gap = ((result.getMeanObjective() - milpBenchmark) / milpBenchmark) * 100;
             LoggingUtils.logInfo("Completed " + config.getName() +
                     " - Mean Objective: " + String.format("%.2f", result.getMeanObjective()) +
-                    " - Gap: " + String.format("%.1f%%", result.getMilpGapPercentage()));
+                    " - Gap: " + String.format("%.1f%%", gap));
         }
 
         // Analyze and export results
@@ -163,7 +203,7 @@ public class BenchmarkRunner {
                 .map(CompletableFuture::join)
                 .collect(Collectors.toList());
 
-        return new BenchmarkResult(config, runs);
+        return new BenchmarkResult(config, runs, getMILPBenchmark());
     }
 
     /**
@@ -209,7 +249,10 @@ public class BenchmarkRunner {
      * Analyze benchmark results and identify best strategies
      */
     private void analyzeResults() {
+        double milpBenchmark = getMILPBenchmark();
+
         LoggingUtils.logSectionHeader("BENCHMARK ANALYSIS RESULTS");
+        LoggingUtils.logInfo("Using MILP benchmark: " + milpBenchmark + " for dataset: " + datasetName);
 
         // Sort results by mean objective (best first)
         List<BenchmarkResult> sortedResults = results.stream()
@@ -229,7 +272,7 @@ public class BenchmarkRunner {
                 .min(Comparator.comparingDouble(BenchmarkResult::getMeanObjective))
                 .orElse(bestOverall);
 
-        // Print summary
+        // Print summary with correct MILP gaps
         LoggingUtils.logInfo("BEST OVERALL STRATEGY:");
         LoggingUtils.logInfo("  " + bestOverall.getConfiguration().getName());
         LoggingUtils.logInfo("  Mean Objective: " + String.format("%.2f", bestOverall.getMeanObjective()));
@@ -261,7 +304,7 @@ public class BenchmarkRunner {
     }
 
     /**
-     * Categorize strategy performance
+     * Categorize strategy performance based on corrected MILP gaps
      */
     private String categorizePerformance(BenchmarkResult result) {
         if (result.getFeasibilityRate() < 0.8) {
@@ -358,12 +401,13 @@ public class BenchmarkRunner {
         try (PrintWriter writer = new PrintWriter(new FileWriter(csvFile))) {
             // Header
             writer.println("Strategy,Description,Runs,MeanObjective,StdDev,BestObjective,WorstObjective," +
-                    "MeanTime(ms),FeasibilityRate,MILPGap%,Category");
+                    "MeanTime(ms),FeasibilityRate,MILPGap%,Category,Dataset,MILPBenchmark");
 
             // Data rows
+            double milpBenchmark = getMILPBenchmark();
             for (BenchmarkResult result : results) {
                 BenchmarkConfiguration config = result.getConfiguration();
-                writer.printf("%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%.1f,%.3f,%.2f,%s%n",
+                writer.printf("%s,%s,%d,%.3f,%.3f,%.3f,%.3f,%.1f,%.3f,%.2f,%s,%s,%.1f%n",
                         config.getName(),
                         config.getDescription().replace(",", ";"),
                         result.getTotalRuns(),
@@ -374,7 +418,9 @@ public class BenchmarkRunner {
                         result.getMeanComputationTime(),
                         result.getFeasibilityRate(),
                         result.getMilpGapPercentage(),
-                        categorizePerformance(result));
+                        categorizePerformance(result),
+                        datasetName,
+                        milpBenchmark);
             }
         }
 
@@ -389,20 +435,23 @@ public class BenchmarkRunner {
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(detailFile))) {
             // Header
-            writer.println("Strategy,RunID,Objective,ComputationTime(ms),Feasible,ErrorMessage");
+            writer.println("Strategy,RunID,Objective,ComputationTime(ms),Feasible,ErrorMessage,Dataset,MILPBenchmark");
 
             // Data rows
+            double milpBenchmark = getMILPBenchmark();
             for (BenchmarkResult result : results) {
                 String strategyName = result.getConfiguration().getName();
 
                 for (BenchmarkRun run : result.getRuns()) {
-                    writer.printf("%s,%d,%.3f,%d,%s,%s%n",
+                    writer.printf("%s,%d,%.3f,%d,%s,%s,%s,%.1f%n",
                             strategyName,
                             run.getRunId(),
                             run.getObjectiveValue(),
                             run.getComputationTime(),
                             run.isFeasible(),
-                            run.getErrorMessage() != null ? run.getErrorMessage().replace(",", ";") : "");
+                            run.getErrorMessage() != null ? run.getErrorMessage().replace(",", ";") : "",
+                            datasetName,
+                            milpBenchmark);
                 }
             }
         }
@@ -415,13 +464,15 @@ public class BenchmarkRunner {
      */
     private void exportAnalysisReport() throws IOException {
         File reportFile = new File(outputDirectory, "benchmark_analysis_report.txt");
+        double milpBenchmark = getMILPBenchmark();
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(reportFile))) {
             writer.println("ANAESTHETIST ROSTERING PROBLEM - HEURISTIC BENCHMARK REPORT");
             writer.println("=" + "=".repeat(70));
             writer.println(
                     "Generated: " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-            writer.println("MILP Benchmark Target: " + MILP_BENCHMARK_OBJECTIVE);
+            writer.println("Dataset: " + datasetName);
+            writer.println("MILP Benchmark Target: " + milpBenchmark);
             writer.println("Problem Instance: " + instance.toString());
             writer.println();
 
@@ -465,6 +516,11 @@ public class BenchmarkRunner {
             writer.println("- Prioritize strategies with feasibility rates above 95%");
             writer.println("- Consider computational time requirements for real-time applications");
             writer.println("- Validate selected strategy on additional problem instances");
+            writer.println();
+            writer.println("MILP BENCHMARK INFORMATION:");
+            writer.println("- Dataset: " + datasetName);
+            writer.println("- MILP Objective: " + milpBenchmark);
+            writer.println("- Based on MODEL column from research paper constraint penalties");
         }
 
         LoggingUtils.logInfo("Analysis report exported: " + reportFile.getAbsolutePath());
@@ -485,7 +541,7 @@ public class BenchmarkRunner {
     public static void main(String[] args) {
         if (args.length < 1) {
             System.out.println("Usage: java BenchmarkRunner <data_path> [runs_per_strategy]");
-            System.out.println("  data_path: Path to CSV data files");
+            System.out.println("  data_path: Path to CSV data files (month1, month2, or month3)");
             System.out.println("  runs_per_strategy: Number of runs per strategy (default: 30)");
             return;
         }
@@ -509,6 +565,8 @@ public class BenchmarkRunner {
                 LoggingUtils.logInfo("\nBenchmark completed successfully!");
                 LoggingUtils.logInfo("Total strategies tested: " + results.size());
                 LoggingUtils.logInfo("Results exported to: " + runner.outputDirectory);
+                LoggingUtils.logInfo("Dataset: " + runner.datasetName +
+                        " (MILP benchmark: " + runner.getMILPBenchmark() + ")");
 
             } finally {
                 runner.shutdown();
@@ -605,7 +663,8 @@ public class BenchmarkRunner {
     }
 
     /**
-     * Aggregated results for a benchmark configuration
+     * Aggregated results for a benchmark configuration with corrected MILP
+     * comparison
      */
     public static class BenchmarkResult {
         private BenchmarkConfiguration configuration;
@@ -617,10 +676,12 @@ public class BenchmarkRunner {
         private double meanComputationTime;
         private double feasibilityRate;
         private double milpGapPercentage;
+        private double milpBenchmark;
 
-        public BenchmarkResult(BenchmarkConfiguration configuration, List<BenchmarkRun> runs) {
+        public BenchmarkResult(BenchmarkConfiguration configuration, List<BenchmarkRun> runs, double milpBenchmark) {
             this.configuration = configuration;
             this.runs = new ArrayList<>(runs);
+            this.milpBenchmark = milpBenchmark;
             calculateStatistics();
         }
 
@@ -671,9 +732,9 @@ public class BenchmarkRunner {
                     .sum();
             this.feasibilityRate = (double) feasibleCount / runs.size();
 
-            // MILP gap
-            if (meanObjective < Double.MAX_VALUE) {
-                this.milpGapPercentage = ((meanObjective - MILP_BENCHMARK_OBJECTIVE) / MILP_BENCHMARK_OBJECTIVE) * 100;
+            // MILP gap with corrected benchmark
+            if (meanObjective < Double.MAX_VALUE && milpBenchmark > 0) {
+                this.milpGapPercentage = ((meanObjective - milpBenchmark) / milpBenchmark) * 100;
             } else {
                 this.milpGapPercentage = Double.MAX_VALUE;
             }
@@ -714,6 +775,10 @@ public class BenchmarkRunner {
 
         public double getMilpGapPercentage() {
             return milpGapPercentage;
+        }
+
+        public double getMilpBenchmark() {
+            return milpBenchmark;
         }
 
         public int getTotalRuns() {

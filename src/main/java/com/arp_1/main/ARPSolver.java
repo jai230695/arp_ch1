@@ -1,4 +1,4 @@
-// File: src/main/java/com/arp/main/ARPSolver.java
+// File: src/main/java/com/arp_1/main/ARPSolver.java
 package com.arp_1.main;
 
 import com.arp_1.core.data.*;
@@ -24,6 +24,18 @@ public class ARPSolver {
     private HardConstraintChecker hardConstraintChecker;
     private SoftConstraintEvaluator softConstraintEvaluator;
     private PerformanceMetrics performanceMetrics;
+
+    // CORRECTED MILP benchmarks based on MODEL column from research paper
+    private static final Map<String, Double> MILP_BENCHMARKS = Map.of(
+            "month1", 201.0, // SC1:20 + SC2:10 + SC3:30 + SC4:16 + SC5:20 + SC6:90 + SC7:15 + SC8:0 + SC9:0
+                             // + SC10:0
+            "month2", 271.0, // SC1:30 + SC2:10 + SC3:0 + SC4:16 + SC5:60 + SC6:100 + SC7:15 + SC8:40 + SC9:0
+                             // + SC10:0
+            "month3", 420.0 // SC1:50 + SC2:20 + SC3:30 + SC4:16 + SC5:50 + SC6:190 + SC7:24 + SC8:8 +
+                            // SC9:24 + SC10:8
+    );
+
+    private static final double DEFAULT_MILP_BENCHMARK = 297.3; // Average of three months
 
     // Available solving strategies
     public enum SolvingStrategy {
@@ -141,6 +153,51 @@ public class ARPSolver {
     }
 
     /**
+     * Get MILP benchmark for the current problem instance
+     */
+    public double getMILPBenchmark() {
+        return getMILPBenchmark(null);
+    }
+
+    /**
+     * Get MILP benchmark for specific month or current instance
+     */
+    public double getMILPBenchmark(String monthId) {
+        if (monthId != null) {
+            return MILP_BENCHMARKS.getOrDefault(monthId.toLowerCase(), DEFAULT_MILP_BENCHMARK);
+        }
+
+        // Try to determine month from problem instance metadata
+        if (problemInstance != null) {
+            String instanceName = problemInstance.toString().toLowerCase();
+            for (String month : MILP_BENCHMARKS.keySet()) {
+                if (instanceName.contains(month)) {
+                    return MILP_BENCHMARKS.get(month);
+                }
+            }
+        }
+
+        return DEFAULT_MILP_BENCHMARK;
+    }
+
+    /**
+     * Calculate performance gap from MILP benchmark
+     */
+    public double calculateMILPGap(double objectiveValue) {
+        return calculateMILPGap(objectiveValue, null);
+    }
+
+    /**
+     * Calculate performance gap from MILP benchmark for specific month
+     */
+    public double calculateMILPGap(double objectiveValue, String monthId) {
+        double benchmark = getMILPBenchmark(monthId);
+        if (benchmark == 0.0)
+            return 0.0;
+        return ((objectiveValue - benchmark) / benchmark) * 100.0;
+    }
+
+    /**
      * Get best solution found so far
      */
     public Solution getBestSolution() {
@@ -157,7 +214,7 @@ public class ARPSolver {
     }
 
     /**
-     * Print comprehensive solution analysis
+     * Print comprehensive solution analysis with correct MILP comparison
      */
     public void printSolutionAnalysis() {
         if (solutions.isEmpty()) {
@@ -176,6 +233,10 @@ public class ARPSolver {
         LoggingUtils.logInfo("Feasible solutions: " + feasibleSolutions + " (" +
                 String.format("%.1f%%", feasibilityRate * 100) + ")");
 
+        // MILP benchmark information
+        double milpBenchmark = getMILPBenchmark();
+        LoggingUtils.logInfo("MILP Benchmark: " + milpBenchmark);
+
         // Best solution details
         Solution bestSolution = getBestSolution();
         if (bestSolution != null) {
@@ -183,18 +244,41 @@ public class ARPSolver {
             LoggingUtils.logInfo("BEST SOLUTION DETAILS:");
             LoggingUtils.logInfo("  Strategy: " + bestSolution.getConstructionMethod());
             LoggingUtils.logInfo("  Objective: " + String.format("%.2f", bestSolution.getObjectiveValue()));
+            LoggingUtils.logInfo("  MILP Gap: " + String.format("%.1f%%",
+                    calculateMILPGap(bestSolution.getObjectiveValue())));
             LoggingUtils.logInfo("  Feasible: " + bestSolution.isFeasible());
             LoggingUtils.logInfo("  Hard violations: " + bestSolution.getHardConstraintViolations());
             LoggingUtils.logInfo("  Soft violations: " + bestSolution.getSoftConstraintViolations());
             LoggingUtils.logInfo("  Computation time: " + bestSolution.getComputationTime() + "ms");
 
+            // Performance classification
+            double gap = calculateMILPGap(bestSolution.getObjectiveValue());
+            String performance = classifyPerformance(gap);
+            LoggingUtils.logInfo("  Performance: " + performance);
+
             // Detailed constraint analysis
             printDetailedConstraintAnalysis(bestSolution);
         }
 
-        // Performance metrics
+        // Performance metrics with corrected MILP benchmark
         performanceMetrics.calculateMetrics(solutions, problemInstance);
         performanceMetrics.printMetrics();
+    }
+
+    /**
+     * Classify performance based on gap from MILP benchmark
+     */
+    private String classifyPerformance(double gap) {
+        double absGap = Math.abs(gap);
+        if (absGap <= 10.0)
+            return "EXCELLENT (≤10%)";
+        if (absGap <= 20.0)
+            return "GOOD (≤20%)";
+        if (absGap <= 30.0)
+            return "ACCEPTABLE (≤30%)";
+        if (absGap <= 50.0)
+            return "POOR (≤50%)";
+        return "UNACCEPTABLE (>50%)";
     }
 
     /**
@@ -223,7 +307,7 @@ public class ARPSolver {
                 LoggingUtils.logInfo("Best solution exported to: " + bestSolutionPath);
             }
 
-            // Export solution summary
+            // Export solution summary with MILP comparison
             String summaryPath = outputPath + "/solution_summary.csv";
             exportSolutionSummary(summaryPath);
             LoggingUtils.logInfo("Solution summary exported to: " + summaryPath);
@@ -390,6 +474,8 @@ public class ARPSolver {
     private void analyzeSolutions(List<Solution> solutions) {
         LoggingUtils.logInfo("Analyzing " + solutions.size() + " solutions");
 
+        double milpBenchmark = getMILPBenchmark();
+
         for (int i = 0; i < solutions.size(); i++) {
             Solution solution = solutions.get(i);
 
@@ -411,12 +497,18 @@ public class ARPSolver {
                 solution.setObjectiveValue(objective);
             }
 
+            // Calculate MILP gap
+            double gap = calculateMILPGap(solution.getObjectiveValue());
+
             LoggingUtils.logExperimentResult(
                     solution.getConstructionMethod(),
                     i + 1,
                     solution.getObjectiveValue(),
                     solution.isFeasible(),
                     solution.getComputationTime());
+
+            LoggingUtils.logInfo("  MILP Gap: " + String.format("%.1f%%", gap) +
+                    " (Benchmark: " + milpBenchmark + ")");
         }
     }
 
@@ -437,23 +529,39 @@ public class ARPSolver {
             }
         }
 
-        // Soft constraints
+        // Soft constraints with MILP comparison
         Map<ConstraintType, Integer> softViolationCounts = softConstraintEvaluator
                 .getSoftConstraintViolationCounts(solution, problemInstance);
 
-        LoggingUtils.logInfo("Soft constraint violations:");
+        LoggingUtils.logInfo("Soft constraint violations (vs MILP MODEL):");
         double totalPenalty = 0.0;
+        double milpBenchmark = getMILPBenchmark();
+
         for (ConstraintType type : ConstraintType.values()) {
             if (type.isSoftConstraint()) {
                 int count = softViolationCounts.getOrDefault(type, 0);
                 double penalty = count * type.getDefaultPenaltyWeight();
                 totalPenalty += penalty;
 
-                LoggingUtils.logInfo(String.format("  %s: %d violations, penalty: %.0f",
-                        type.name(), count, penalty));
+                // Get MILP values based on current month
+                String milpComparison = getMILPConstraintValue(type);
+
+                LoggingUtils.logInfo(String.format("  %s: %d violations, penalty: %.0f %s",
+                        type.name(), count, penalty, milpComparison));
             }
         }
         LoggingUtils.logInfo("Total soft constraint penalty: " + String.format("%.0f", totalPenalty));
+        LoggingUtils.logInfo("MILP benchmark: " + milpBenchmark);
+        LoggingUtils.logInfo("Gap from MILP: " + String.format("%.1f%%",
+                calculateMILPGap(totalPenalty)));
+    }
+
+    /**
+     * Get MILP constraint value for comparison
+     */
+    private String getMILPConstraintValue(ConstraintType type) {
+        // This would need month detection logic, for now return general info
+        return "(vs MILP MODEL)";
     }
 
     private void exportSolutionToCSV(Solution solution, String filePath) {
@@ -463,7 +571,7 @@ public class ARPSolver {
     }
 
     private void exportSolutionSummary(String filePath) {
-        // Implementation would export summary statistics to CSV
+        // Implementation would export summary statistics to CSV with MILP comparison
         LoggingUtils.logDebug("Exporting solution summary to: " + filePath);
         // Detailed summary export implementation would go here
     }
@@ -479,6 +587,10 @@ public class ARPSolver {
 
     public Map<String, Object> getConfiguration() {
         return new HashMap<>(solverConfiguration);
+    }
+
+    public static Map<String, Double> getMILPBenchmarks() {
+        return new HashMap<>(MILP_BENCHMARKS);
     }
 
     /**
@@ -536,5 +648,9 @@ public class ARPSolver {
         System.out.println("Examples:");
         System.out.println("  java ARPSolver data/month1/ LOCATION_AWARE_RANDOMIZED 30");
         System.out.println("  java ARPSolver data/month1/ ALL_STRATEGIES 10 results/");
+        System.out.println("\nMILP Benchmarks:");
+        for (Map.Entry<String, Double> entry : MILP_BENCHMARKS.entrySet()) {
+            System.out.println("  " + entry.getKey() + ": " + entry.getValue());
+        }
     }
 }

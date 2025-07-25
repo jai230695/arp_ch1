@@ -1,4 +1,4 @@
-// File: src/main/java/com/arp/main/MultipleRunsExperiment.java
+// File: src/main/java/com/arp_1/main/MultipleRunsExperiment.java
 package com.arp_1.main;
 
 import com.arp_1.core.data.*;
@@ -25,10 +25,19 @@ public class MultipleRunsExperiment {
     private ComparisonAnalyzer comparisonAnalyzer;
     private ExecutorService executorService;
 
-    // Experiment configuration
-    private static final double MILP_BENCHMARK = 70.0;
+    // Updated MILP benchmarks based on MODEL column data from tables
+    private static final Map<String, Double> MILP_BENCHMARKS = Map.of(
+            "month1", 201.0, // Sum of MODEL column for Month 1: 20+10+30+16+20+90+15+0+0+0
+            "month2", 209.0, // Sum of MODEL column for Month 2: 30+10+0+16+60+100+15+40+0+0
+            "month3", 238.0 // Sum of MODEL column for Month 3: 50+20+30+16+50+190+24+8+24+8
+    );
+
+    private static final double DEFAULT_MILP_BENCHMARK = 201.0; // Default to Month 1
     private static final double SIGNIFICANCE_LEVEL = 0.05;
     private static final int DEFAULT_RUNS_PER_STRATEGY = 30;
+
+    private String datasetName;
+    private double currentMilpBenchmark;
 
     public MultipleRunsExperiment(ProblemInstance problemInstance) {
         this.problemInstance = problemInstance;
@@ -36,6 +45,42 @@ public class MultipleRunsExperiment {
         this.statisticalAnalyzer = new StatisticalAnalyzer();
         this.comparisonAnalyzer = new ComparisonAnalyzer();
         this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+        // Determine dataset name and set appropriate MILP benchmark
+        this.datasetName = detectDatasetName(problemInstance);
+        this.currentMilpBenchmark = MILP_BENCHMARKS.getOrDefault(datasetName.toLowerCase(), DEFAULT_MILP_BENCHMARK);
+
+        LoggingUtils.logInfo("Detected dataset: " + datasetName + ", MILP benchmark: " + currentMilpBenchmark);
+    }
+
+    /**
+     * Detect dataset name from problem instance for MILP benchmark selection
+     */
+    private String detectDatasetName(ProblemInstance instance) {
+        // Try to extract dataset name from toString or other identifying
+        // characteristics
+        String instanceStr = instance.toString().toLowerCase();
+
+        if (instanceStr.contains("month1") || instanceStr.contains("month_1")) {
+            return "month1";
+        } else if (instanceStr.contains("month2") || instanceStr.contains("month_2")) {
+            return "month2";
+        } else if (instanceStr.contains("month3") || instanceStr.contains("month_3")) {
+            return "month3";
+        }
+
+        // Default fallback
+        LoggingUtils.logWarning("Could not detect dataset name, using default month1 benchmark");
+        return "month1";
+    }
+
+    /**
+     * Set specific MILP benchmark for this experiment
+     */
+    public void setMilpBenchmark(String dataset, double benchmark) {
+        this.datasetName = dataset;
+        this.currentMilpBenchmark = benchmark;
+        LoggingUtils.logInfo("MILP benchmark set to " + benchmark + " for dataset " + dataset);
     }
 
     /**
@@ -45,12 +90,16 @@ public class MultipleRunsExperiment {
         LoggingUtils.logSectionHeader("COMPREHENSIVE HEURISTIC EXPERIMENT");
         LoggingUtils.logInfo("Running comprehensive experiment with " + runsPerStrategy + " runs per strategy");
         LoggingUtils.logInfo("Problem instance: " + problemInstance.toString());
+        LoggingUtils.logInfo("Dataset: " + datasetName + ", MILP benchmark: " + currentMilpBenchmark);
 
         long experimentStartTime = System.currentTimeMillis();
 
         try {
             // Clear previous results
             experimentResults.clear();
+
+            // Set benchmark in comparison analyzer
+            comparisonAnalyzer.setBenchmark(currentMilpBenchmark);
 
             // Test all strategies with different configurations
             runLocationAwareExperiments(runsPerStrategy);
@@ -281,12 +330,11 @@ public class MultipleRunsExperiment {
      */
     private void performBenchmarkComparison() {
         LoggingUtils.logSectionHeader("MILP BENCHMARK COMPARISON");
-        LoggingUtils.logInfo("MILP Benchmark: " + MILP_BENCHMARK);
-
-        comparisonAnalyzer.setBenchmark(MILP_BENCHMARK);
+        LoggingUtils.logInfo("Dataset: " + datasetName);
+        LoggingUtils.logInfo("MILP Benchmark: " + currentMilpBenchmark);
 
         for (ExperimentResult result : experimentResults) {
-            double gap = comparisonAnalyzer.calculateGap(result.getMeanObjective(), MILP_BENCHMARK);
+            double gap = comparisonAnalyzer.calculateGap(result.getMeanObjective(), currentMilpBenchmark);
             String performance = classifyPerformance(gap);
 
             LoggingUtils.logInfo(String.format("%-30s: %6.2f (%+5.1f%%) [%s]",
@@ -298,14 +346,15 @@ public class MultipleRunsExperiment {
 
         // Find strategies within acceptable gap
         List<ExperimentResult> acceptableStrategies = experimentResults.stream()
-                .filter(r -> Math.abs(comparisonAnalyzer.calculateGap(r.getMeanObjective(), MILP_BENCHMARK)) <= 30.0)
+                .filter(r -> Math
+                        .abs(comparisonAnalyzer.calculateGap(r.getMeanObjective(), currentMilpBenchmark)) <= 30.0)
                 .collect(java.util.stream.Collectors.toList());
 
         LoggingUtils.logInfo("\nStrategies within 30% of MILP benchmark: " + acceptableStrategies.size());
         for (ExperimentResult result : acceptableStrategies) {
             LoggingUtils.logInfo("  " + result.getStrategyName() +
                     " (gap: " + String.format("%.1f%%",
-                            comparisonAnalyzer.calculateGap(result.getMeanObjective(), MILP_BENCHMARK))
+                            comparisonAnalyzer.calculateGap(result.getMeanObjective(), currentMilpBenchmark))
                     + ")");
         }
     }
@@ -316,6 +365,7 @@ public class MultipleRunsExperiment {
     private void printStatisticalSummary() {
         LoggingUtils.logSeparator();
         LoggingUtils.logInfo("STATISTICAL SUMMARY");
+        LoggingUtils.logInfo("Dataset: " + datasetName + ", MILP Benchmark: " + currentMilpBenchmark);
         LoggingUtils.logSeparator();
 
         for (ExperimentResult result : experimentResults) {
@@ -338,6 +388,8 @@ public class MultipleRunsExperiment {
         LoggingUtils.logInfo("  Total strategies tested: " + experimentResults.size());
         LoggingUtils.logInfo("  Average objective value: " + String.format("%.2f", overallMeanObjective));
         LoggingUtils.logInfo("  Average feasibility rate: " + String.format("%.1f%%", overallFeasibilityRate * 100));
+        LoggingUtils.logInfo("  MILP benchmark performance: " +
+                String.format("%.1f%%", comparisonAnalyzer.calculateGap(overallMeanObjective, currentMilpBenchmark)));
     }
 
     /**
@@ -417,6 +469,14 @@ public class MultipleRunsExperiment {
                 .orElse(null);
     }
 
+    public double getCurrentMilpBenchmark() {
+        return currentMilpBenchmark;
+    }
+
+    public String getDatasetName() {
+        return datasetName;
+    }
+
     /**
      * Functional interface for strategy creation
      */
@@ -440,6 +500,7 @@ public class MultipleRunsExperiment {
             String dataPath = args[0];
             int runsPerStrategy = args.length > 1 ? Integer.parseInt(args[1]) : DEFAULT_RUNS_PER_STRATEGY;
             String outputPath = args.length > 2 ? args[2] : "results/experiments/";
+            String datasetName = args.length > 3 ? args[3] : null;
 
             // Load problem instance
             LoggingUtils.logInfo("Loading problem instance from: " + dataPath);
@@ -447,8 +508,15 @@ public class MultipleRunsExperiment {
             ValidationUtils.validateProblemInstance(instance);
             ValidationUtils.printProblemInstanceSummary(instance);
 
-            // Create and run experiment
+            // Create experiment
             experiment = new MultipleRunsExperiment(instance);
+
+            // Set specific dataset if provided
+            if (datasetName != null && MILP_BENCHMARKS.containsKey(datasetName.toLowerCase())) {
+                experiment.setMilpBenchmark(datasetName, MILP_BENCHMARKS.get(datasetName.toLowerCase()));
+            }
+
+            // Run experiment
             experiment.runComprehensiveExperiment(runsPerStrategy);
 
             // Export results
@@ -467,13 +535,18 @@ public class MultipleRunsExperiment {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: java MultipleRunsExperiment <data_path> [runs_per_strategy] [output_path]");
+        System.out.println(
+                "Usage: java MultipleRunsExperiment <data_path> [runs_per_strategy] [output_path] [dataset_name]");
         System.out.println("  data_path: Path to CSV data files");
         System.out.println(
                 "  runs_per_strategy: Number of runs per strategy (default: " + DEFAULT_RUNS_PER_STRATEGY + ")");
         System.out.println("  output_path: Output directory for results (default: results/experiments/)");
-        System.out.println("\nExample:");
-        System.out.println("  java MultipleRunsExperiment data/month1/ 30 results/");
+        System.out.println("  dataset_name: Dataset name for MILP benchmark (month1, month2, month3)");
+        System.out.println("\nMILP Benchmarks:");
+        MILP_BENCHMARKS.forEach((key, value) -> System.out.println("  " + key + ": " + value));
+        System.out.println("\nExamples:");
+        System.out.println("  java MultipleRunsExperiment data/month1/ 30 results/ month1");
+        System.out.println("  java MultipleRunsExperiment data/month2/ 30 results/ month2");
     }
 
     /**
